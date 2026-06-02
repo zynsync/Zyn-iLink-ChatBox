@@ -16,3 +16,13 @@
    ```bash
    git clone https://github.com/zynsync/Zyn-iLink-ChatBox.git
    cd Zyn-iLink-ChatBox
+   ```
+2.安装依赖
+  ```bash
+  pip install qrcode pycryptodome
+  ```
+3.运行
+  ```bash
+  python Zyn-iLink-ChatBox.py
+
+  ```
