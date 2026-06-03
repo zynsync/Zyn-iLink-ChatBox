@@ -338,7 +338,6 @@ class WeChatiLinkBot:
     MEDIA_TYPE_NAMES = {2: "图片", 3: "语音", 4: "文件", 5: "视频"}
     MEDIA_TYPE_PREFIXES = {"image": "[图片]", "video": "[视频]", "file": "[文件]", "voice": "[语音]"}
     EXPIRED_CODES = {-14, 40014, 1002}
-    SCRIPT_VERSION = "2.0.0"
     AUTHOR_NAME = "ZynSync"
     
     def __init__(self):
@@ -1939,16 +1938,12 @@ class WeChatiLinkBot:
 
     const _loadAbout = async function() {
         const authorEl = document.getElementById("about-author");
-        const versionEl = document.getElementById("about-version");
         if (authorEl) authorEl.textContent = "加载中...";
-        if (versionEl) versionEl.textContent = "加载中...";
         const e = await _get("about");
-        if (e) {
-            if (authorEl) authorEl.textContent = e.author || "未知";
-            if (versionEl) versionEl.textContent = e.version || "未知";
-        } else {
-            if (authorEl) authorEl.textContent = "获取失败";
-            if (versionEl) versionEl.textContent = "获取失败";
+        if (e && authorEl) {
+            authorEl.textContent = e.author || "未知";
+        } else if (authorEl) {
+            authorEl.textContent = "获取失败";
         }
     };
     
@@ -2584,6 +2579,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .settings-save:hover { background: var(--accent-hover); }
 .about-logo { display: flex; flex-direction: column; align-items: center; padding: 24px 0 16px; }
 .about-logo-circle { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600; box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
+.about-logo-img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
 .about-logo-name { margin-top: 12px; font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .about-info { margin-top: 8px; background: var(--setting-item-bg); border-radius: 10px; overflow: hidden; }
 .about-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; }
@@ -2811,7 +2807,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         <div class="settings-scroll">
             <div class="settings-body">
                 <div class="about-logo">
-                    <div class="about-logo-circle">Zyn</div>
+                    <img class="about-logo-img" src="https://ms.188850.xyz/file/default/1780497560383_retouch_2026050219212691.png" alt="作者头像" />
                     <div class="about-logo-name">Zyn iLink ChatBox</div>
                 </div>
                 <div class="about-info">
@@ -2821,7 +2817,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     </div>
                     <div class="about-row">
                         <div class="about-label">脚本版本号</div>
-                        <div class="about-value" id="about-version">加载中...</div>
+                        <div class="about-value" id="about-version">2.0.0</div>
                     </div>
                 </div>
             </div>
@@ -2955,7 +2951,6 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 
             def _serve_about(self):
                 self._send_json({
-                    "version": bot.SCRIPT_VERSION,
                     "author": bot.AUTHOR_NAME
                 })
             
