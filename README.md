@@ -65,7 +65,8 @@ pip install qrcode pycryptodome
 python Zyn-iLink-ChatBox.py
 ```
 
-💡 提示：更推荐使用 启动器-带热更新 文件夹内的启动器！
+💡 提示：
+更推荐使用 启动器-带热更新 文件夹内的启动器！方便快捷 热更新
 
 ---
 
