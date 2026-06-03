@@ -85,7 +85,7 @@ python Zyn-iLink-ChatBox.py
 您的支持是我持续更新的动力！ 🙏
 
 <div align="center">
-  <img width="400" alt="赞助二维码" src="https://github.com/user-attachments/assets/25c04fca-4b30-4e10-8ce8-3e7ee627f203" />
+  <img width="1080" height="1621" alt="Image" src="https://github.com/user-attachments/assets/560e99d9-4dc7-44c9-8c66-d8824816fc6b" />
 </div>
 
 ---
