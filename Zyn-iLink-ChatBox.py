@@ -331,6 +331,7 @@ CONFIG_FILE = "wechat_bot_config.json"
 MESSAGES_FILE = "wechat_messages.json"
 AI_CONFIG_FILE = "ai_config.json"
 MEDIA_CACHE_DIR = "media_cache"
+USER_DATA_DIR = "user_data"
 
 class WeChatiLinkBot:
     ILINK_BASE_URL = "https://ilinkai.weixin.qq.com"
@@ -365,8 +366,14 @@ class WeChatiLinkBot:
         self._session_tokens: Dict[str, float] = {}
         self._media_cache_dir = Path(MEDIA_CACHE_DIR)
         self._media_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._user_data_dir = Path(USER_DATA_DIR)
+        self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._media_downloading: Dict[str, threading.Event] = {}
         self._media_download_lock = threading.Lock()
+        self._user_threads: Dict[str, threading.Thread] = {}
+        self._user_msg_locks: Dict[str, threading.Lock] = {}
+        self._add_user_lock = threading.Lock()
+        self._pending_qrcode: Optional[dict] = None
         
         self._load_messages()
     
@@ -423,6 +430,142 @@ class WeChatiLinkBot:
         expired = [t for t, exp in self._session_tokens.items() if exp <= now]
         for t in expired:
             del self._session_tokens[t]
+    
+    def _get_user_dir(self, user_id: str) -> Path:
+        """获取用户数据目录"""
+        safe_id = hashlib.md5(user_id.encode('utf-8')).hexdigest()[:16]
+        user_dir = self._user_data_dir / safe_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+        return user_dir
+    
+    def _get_user_media_dir(self, user_id: str) -> Path:
+        """获取用户媒体缓存目录"""
+        media_dir = self._get_user_dir(user_id) / "media"
+        media_dir.mkdir(parents=True, exist_ok=True)
+        return media_dir
+    
+    def _get_user_token_file(self, user_id: str) -> Path:
+        """获取用户 token 文件路径"""
+        return self._get_user_dir(user_id) / "token.json"
+    
+    def _get_user_messages_file(self, user_id: str) -> Path:
+        """获取用户消息文件路径"""
+        return self._get_user_dir(user_id) / "messages.json"
+    
+    def _save_user_token(self, user_id: str, context_token: str):
+        """保存用户 context token"""
+        try:
+            data = {
+                "user_id": user_id,
+                "context_token": context_token,
+                "saved_at": datetime.now().isoformat()
+            }
+            with open(self._get_user_token_file(user_id), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[USER] 保存用户 token 失败 ({user_id}): {e}")
+    
+    def _load_user_token(self, user_id: str) -> Optional[str]:
+        """加载用户 context token"""
+        token_file = self._get_user_token_file(user_id)
+        try:
+            if token_file.exists():
+                with open(token_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data.get("context_token")
+        except Exception as e:
+            print(f"[USER] 加载用户 token 失败 ({user_id}): {e}")
+        return None
+    
+    def _save_user_messages(self, user_id: str):
+        """保存用户消息到独立文件"""
+        if not user_id:
+            return
+        try:
+            user_msgs = [m for m in self._messages 
+                        if m.get('from') == user_id or m.get('to') == user_id]
+            
+            if len(user_msgs) > self._max_messages_per_user * 2:
+                user_msgs = user_msgs[-self._max_messages_per_user:]
+            
+            data = {
+                "user_id": user_id,
+                "messages": user_msgs,
+                "count": len(user_msgs),
+                "saved_at": datetime.now().isoformat()
+            }
+            with open(self._get_user_messages_file(user_id), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[USER] 保存用户消息失败 ({user_id}): {e}")
+    
+    def _load_user_messages(self, user_id: str) -> List[dict]:
+        """从独立文件加载用户消息"""
+        msg_file = self._get_user_messages_file(user_id)
+        try:
+            if msg_file.exists():
+                with open(msg_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data.get("messages", [])
+        except Exception as e:
+            print(f"[USER] 加载用户消息失败 ({user_id}): {e}")
+        return []
+    
+    def _load_all_user_messages(self):
+        """加载所有用户的消息到全局列表"""
+        all_msgs = []
+        loaded_ids = set()
+        
+        for user_id in self._context_tokens.keys():
+            user_msgs = self._load_user_messages(user_id)
+            for msg in user_msgs:
+                msg_id = msg.get('id')
+                if msg_id and msg_id not in loaded_ids:
+                    all_msgs.append(msg)
+                    loaded_ids.add(msg_id)
+        
+        all_msgs.sort(key=lambda m: m.get('id', 0))
+        self._messages = all_msgs
+        
+        if self._messages:
+            self._last_msg_id = max(msg.get('id', 0) for msg in self._messages)
+        else:
+            self._last_msg_id = 0
+        
+        print(f"[MSG] 已从用户文件夹加载 {len(self._messages)} 条消息 ({len(self._context_tokens)} 个用户)")
+    
+    def _save_all_messages(self):
+        """保存所有用户的消息到各自的文件夹"""
+        for user_id in self._context_tokens.keys():
+            self._save_user_messages(user_id)
+    
+    def _get_user_media_cache_path(self, user_id: str, cache_key: str) -> Path:
+        return self._get_user_media_dir(user_id) / cache_key
+    
+    def _get_user_media_meta_path(self, user_id: str, cache_key: str) -> Path:
+        return self._get_user_media_dir(user_id) / (cache_key + ".meta")
+    
+    def _save_user_media_cache(self, user_id: str, cache_key: str, media_data: bytes, mime: str, filename: str = ""):
+        """保存用户媒体缓存"""
+        try:
+            self._get_user_media_cache_path(user_id, cache_key).write_bytes(media_data)
+            meta = {'mime': mime, 'filename': filename, 'size': len(media_data)}
+            self._get_user_media_meta_path(user_id, cache_key).write_text(json.dumps(meta, ensure_ascii=False), 'utf-8')
+        except Exception as e:
+            print(f"[媒体缓存] 保存失败: {e}")
+    
+    def _get_user_cached_media(self, user_id: str, cache_key: str) -> Optional[tuple]:
+        """获取用户媒体缓存"""
+        data_path = self._get_user_media_cache_path(user_id, cache_key)
+        meta_path = self._get_user_media_meta_path(user_id, cache_key)
+        if data_path.exists() and meta_path.exists():
+            try:
+                media_data = data_path.read_bytes()
+                meta = json.loads(meta_path.read_text('utf-8'))
+                return (media_data, meta.get('mime', 'application/octet-stream'), meta.get('filename', ''))
+            except Exception:
+                return None
+        return None
     
     def _call_ai_api(self, user_message: str, history: List[dict], is_active: bool = False, custom_instruction: str = "") -> Optional[str]:
         if not self.ai_config.get("enabled"):
@@ -637,42 +780,56 @@ class WeChatiLinkBot:
             self._schedule_active_message(user_id)
     
     def _load_messages(self):
+        """加载所有用户的消息（兼容旧格式自动迁移）"""
         try:
             if Path(MESSAGES_FILE).exists():
                 with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    self._messages = data.get("messages", [])
-                    print(f"[MSG] 已加载 {len(self._messages)} 条历史消息")
+                    old_messages = data.get("messages", [])
+                    print(f"[MSG] 检测到旧格式消息文件，共 {len(old_messages)} 条，正在迁移...")
                     
-                    if self._messages:
-                        max_id = max(msg.get('id', 0) for msg in self._messages)
-                        self._last_msg_id = max_id
-                    else:
-                        self._last_msg_id = 0
+                    user_msg_map: Dict[str, list] = {}
+                    for msg in old_messages:
+                        uid = msg.get('from') if msg.get('type') == 'in' else msg.get('to')
+                        if uid and uid != 'me':
+                            if uid not in user_msg_map:
+                                user_msg_map[uid] = []
+                            user_msg_map[uid].append(msg)
+                    
+                    for uid, msgs in user_msg_map.items():
+                        existing = self._load_user_messages(uid)
+                        existing_ids = {m.get('id') for m in existing}
+                        new_msgs = [m for m in msgs if m.get('id') not in existing_ids]
+                        if new_msgs:
+                            all_msgs = existing + new_msgs
+                            all_msgs.sort(key=lambda m: m.get('id', 0))
+                            data = {
+                                "user_id": uid,
+                                "messages": all_msgs,
+                                "count": len(all_msgs),
+                                "saved_at": datetime.now().isoformat()
+                            }
+                            with open(self._get_user_messages_file(uid), "w", encoding="utf-8") as f:
+                                json.dump(data, f, ensure_ascii=False, indent=2)
+                    
+                    bak_file = MESSAGES_FILE + ".bak"
+                    shutil.move(MESSAGES_FILE, bak_file)
+                    print(f"[MSG] 迁移完成，旧文件已备份为 {bak_file}")
+            
+            self._load_all_user_messages()
         except Exception as e:
             print(f"[MSG] 加载历史消息失败: {e}")
             self._messages = []
             self._last_msg_id = 0
     
     def _save_messages(self):
+        """保存消息到各用户文件夹"""
         try:
-            data = {
-                "messages": self._messages,
-                "saved_at": datetime.now().isoformat(),
-                "version": "1.0"
-            }
-            
             if len(self._messages) > self._total_max_messages:
                 print(f"[MSG] 消息数量超过限制，保留最近 {self._total_max_messages} 条")
                 self._messages = self._messages[-self._total_max_messages:]
             
-            with open(MESSAGES_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                
-            try:
-                Path(MESSAGES_FILE).chmod(0o600)
-            except (OSError, AttributeError, NotImplementedError):
-                pass
+            self._save_all_messages()
         except Exception as e:
             print(f"[MSG] 保存消息失败: {e}")
     
@@ -761,6 +918,9 @@ class WeChatiLinkBot:
             Path(CONFIG_FILE).chmod(0o600)
         except (OSError, AttributeError, NotImplementedError):
             pass
+        
+        for user_id, ctx_token in self._context_tokens.items():
+            self._save_user_token(user_id, ctx_token)
     
     def load_config(self) -> bool:
         try:
@@ -772,6 +932,17 @@ class WeChatiLinkBot:
             self._cursor = config.get("cursor", "")
             self._context_tokens = config.get("context_tokens", {})
             self._current_user = config.get("current_user")
+            
+            restored_count = 0
+            for user_id in list(self._context_tokens.keys()):
+                saved_token = self._load_user_token(user_id)
+                if saved_token:
+                    self._context_tokens[user_id] = saved_token
+                    restored_count += 1
+            
+            if restored_count > 0:
+                print(f"[同步] 已从用户文件夹恢复 {restored_count} 个会话 token")
+            
             if self.token:
                 print(f"加载配置成功，{len(self._context_tokens)} 个会话已恢复")
                 if self._current_user:
@@ -1513,7 +1684,95 @@ class WeChatiLinkBot:
         _loadUsers();
         _loadChatListPreviews();
     };
-    
+
+    var _addUserPollTimer = null;
+
+    const _startAddUser = async function() {
+        var modal = document.getElementById("add-user-modal");
+        var statusEl = document.getElementById("add-user-status");
+        var qrEl = document.getElementById("add-user-qr");
+        if (modal) modal.classList.add("show");
+        if (statusEl) statusEl.textContent = "正在生成二维码...";
+        if (qrEl) qrEl.innerHTML = '<div class="add-user-modal-spinner"></div>';
+        
+        try {
+            var result = await _api("add-user-start", {});
+            if (result.status === "already_running") {
+                if (statusEl) statusEl.textContent = "已有进行中的添加操作，请等待...";
+                _startAddUserPoll();
+                return;
+            }
+            if (result.matrix) {
+                _renderAddUserQR(result.matrix);
+                if (statusEl) statusEl.textContent = "请使用微信扫码添加新用户";
+                _startAddUserPoll();
+            } else {
+                if (statusEl) statusEl.textContent = "正在生成二维码...";
+                _startAddUserPoll();
+            }
+        } catch(e) {
+            if (statusEl) statusEl.textContent = "启动失败，请重试";
+        }
+    };
+
+    const _startAddUserPoll = function() {
+        if (_addUserPollTimer) clearInterval(_addUserPollTimer);
+        _addUserPollTimer = setInterval(async function() {
+            try {
+                var data = await _get("add-user-status");
+                var statusEl = document.getElementById("add-user-status");
+                var qrEl = document.getElementById("add-user-qr");
+                
+                if (data.matrix && qrEl && qrEl.querySelector(".add-user-modal-spinner")) {
+                    _renderAddUserQR(data.matrix);
+                }
+                
+                if (data.qrcode_status === "scaned" && statusEl) {
+                    statusEl.textContent = "已扫码，请在手机上确认...";
+                } else if (data.qrcode_status === "done") {
+                    if (statusEl) statusEl.textContent = "添加成功！";
+                    if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
+                    _toast("新用户已添加！");
+                    _state.users = data.users || [];
+                    _renderChatList();
+                    _loadChatListPreviews();
+                    setTimeout(_closeAddUserModal, 1500);
+                } else if (data.qrcode_status === "expired") {
+                    if (statusEl) statusEl.textContent = "二维码已过期，请重新点击加号";
+                    if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
+                } else if (data.qrcode_status === "error") {
+                    if (statusEl) statusEl.textContent = "获取二维码失败，请重试";
+                    if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
+                } else if (data.qrcode_status === "waiting" && statusEl) {
+                    statusEl.textContent = "请使用微信扫码添加新用户";
+                }
+            } catch(e) {}
+        }, 2000);
+    };
+
+    const _renderAddUserQR = function(matrix) {
+        var qrEl = document.getElementById("add-user-qr");
+        if (!qrEl || !matrix) return;
+        var rows = matrix.length;
+        var cols = matrix[0].length;
+        var cellSize = Math.max(6, Math.min(12, Math.floor(280 / cols)));
+        var width = cols * cellSize + 40;
+        var html = '<div class="qr-grid" style="grid-template-columns: repeat(' + cols + ', ' + cellSize + 'px); width: ' + width + 'px; max-width: 100%; overflow-x: auto; margin: 0 auto;">';
+        for (var i = 0; i < rows; i++) {
+            for (var j = 0; j < cols; j++) {
+                html += '<div class="qr-cell ' + (matrix[i][j] === " " ? "white" : "") + '" style="width:' + cellSize + 'px;height:' + cellSize + 'px;"></div>';
+            }
+        }
+        html += "</div>";
+        qrEl.innerHTML = html;
+    };
+
+    const _closeAddUserModal = function() {
+        var modal = document.getElementById("add-user-modal");
+        if (modal) modal.classList.remove("show");
+        if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
+    };
+
     const _loadChatListPreviews = async function() {
         var promises = _state.users.map(async function(userId) {
             try {
@@ -2196,6 +2455,10 @@ class WeChatiLinkBot:
         if (n) n.addEventListener("click", function() { const e = document.getElementById("user-dropdown"); if (e) e.classList.toggle("show"); });
         const chatListSettingsBtn = document.getElementById("chat-list-settings-btn");
         if (chatListSettingsBtn) chatListSettingsBtn.addEventListener("click", _openSettings);
+        const addUserBtn = document.getElementById("chat-list-add-btn");
+        if (addUserBtn) addUserBtn.addEventListener("click", _startAddUser);
+        const addUserCloseBtn = document.getElementById("add-user-close-btn");
+        if (addUserCloseBtn) addUserCloseBtn.addEventListener("click", _closeAddUserModal);
         const chatBackBtn = document.getElementById("chat-back-btn");
         if (chatBackBtn) chatBackBtn.addEventListener("click", _backToChatList);
         const chatMenuBtn = document.getElementById("chat-menu-btn");
@@ -2236,6 +2499,10 @@ class WeChatiLinkBot:
             }
             if (nicknameModal && nicknameModal.classList.contains("show") && e.target === nicknameModal) {
                 _closeNicknameModal();
+            }
+            var addUserModal = document.getElementById("add-user-modal");
+            if (addUserModal && addUserModal.classList.contains("show") && e.target === addUserModal) {
+                _closeAddUserModal();
             }
             if (mediaPanel && mediaPanel.classList.contains("show") && !mediaPanel.contains(e.target) && plusBtn && !plusBtn.contains(e.target)) {
                 _closeMediaPanel();
@@ -2384,6 +2651,8 @@ window.ZynWasm.init();
                         self._serve_ai_config()
                     elif api_path == 'about':
                         self._serve_about()
+                    elif api_path == 'add-user-status':
+                        self._serve_add_user_status()
                     elif api_path.startswith('media/'):
                         self._serve_cached_media(api_path[6:])
                     else:
@@ -2415,6 +2684,8 @@ window.ZynWasm.init();
                     self._handle_save_ai_config(data)
                 elif parsed.path == '/api/wasm/ai-manual-reply':
                     self._handle_ai_manual_reply(data)
+                elif parsed.path == '/api/wasm/add-user-start':
+                    self._handle_add_user_start(data)
                 else:
                     self.send_error(404)
             
@@ -2448,6 +2719,51 @@ window.ZynWasm.init();
                         
                 except Exception as e:
                     print(f"[WEB] 手动 AI 回复异常: {e}")
+                    self._send_json({'success': False, 'error': str(e)})
+            
+            def _handle_add_user_start(self, data):
+                """处理添加用户请求，启动后台线程生成二维码"""
+                try:
+                    with bot._add_user_lock:
+                        if bot._pending_qrcode and bot._pending_qrcode.get("status") not in ("done", "error", "expired"):
+                            self._send_json({'success': True, 'status': 'already_running', 'message': '已有进行中的添加操作'})
+                            return
+                    
+                    qrcode_key = bot.start_add_user_qrcode()
+                    print(f"[WEB] 开始添加用户，qrcode_key={qrcode_key}")
+                    
+                    # 等待二维码生成
+                    for _ in range(30):
+                        with bot._add_user_lock:
+                            if bot._pending_qrcode and bot._pending_qrcode.get("matrix"):
+                                self._send_json({
+                                    'success': True,
+                                    'status': 'qrcode_ready',
+                                    'matrix': bot._pending_qrcode.get("matrix"),
+                                    'key': qrcode_key
+                                })
+                                return
+                        time.sleep(0.5)
+                    
+                    self._send_json({'success': True, 'status': 'generating', 'message': '正在生成二维码...'})
+                except Exception as e:
+                    print(f"[WEB] 添加用户异常: {e}")
+                    self._send_json({'success': False, 'error': str(e)})
+            
+            def _serve_add_user_status(self):
+                """轮询添加用户状态"""
+                try:
+                    status = bot.get_add_user_status()
+                    was_done = status.get("status") == "done"
+                    self._send_json({
+                        'success': True,
+                        'qrcode_status': status.get('status'),
+                        'matrix': status.get('matrix'),
+                        'key': status.get('key'),
+                        'users': list(bot._context_tokens.keys()),
+                        'login_done': was_done
+                    })
+                except Exception as e:
                     self._send_json({'success': False, 'error': str(e)})
             
             def _serve_wasm_page(self):
@@ -2634,6 +2950,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .chat-list-header { height: var(--header-height); background: var(--nav-bg); display: flex; align-items: center; justify-content: center; padding: 0 16px; flex-shrink: 0; border-bottom: 1px solid var(--divider); position: relative; }
 .chat-list-header-title { font-size: 17px; font-weight: 600; color: var(--text-primary); }
 .chat-list-settings-btn { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 50%; background: transparent; color: var(--text-secondary); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.chat-list-add-btn { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.2s; }
+.chat-list-add-btn:hover { background: var(--accent-hover); }
+.chat-list-add-btn:active { transform: translateY(-50%) scale(0.95); }
 .chat-list-items { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--bg-primary); }
 .chat-list-item { display: flex; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--divider); cursor: pointer; transition: background 0.15s; gap: 12px; }
 .chat-list-item:active { background: var(--bg-secondary); }
@@ -2657,8 +2976,16 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .nickname-modal-btn { flex: 1; padding: 12px; border-radius: 8px; border: none; cursor: pointer; font-size: 15px; font-weight: 500; }
 .nickname-modal-btn.cancel { background: var(--bg-secondary); color: var(--text-primary); }
 .nickname-modal-btn.save { background: var(--accent); color: white; }
-@media (max-width: 768px) { .chat-list-item { padding: 12px 14px; } .chat-list-item-avatar { width: 44px; height: 44px; font-size: 20px; } .chat-list-item-name { font-size: 15px; } .chat-list-item-msg { font-size: 12px; } .chat-back-btn { width: 28px; height: 28px; left: 8px; } .chat-header-menu-btn { width: 28px; height: 28px; right: 8px; } .chat-list-settings-btn { width: 28px; height: 28px; right: 8px; } }
-@media (max-width: 480px) { .chat-list-item { padding: 10px 12px; gap: 10px; } .chat-list-item-avatar { width: 40px; height: 40px; font-size: 18px; border-radius: 6px; } .chat-list-item-name { font-size: 14px; } .chat-list-item-msg { font-size: 11px; } .chat-back-btn { width: 28px; height: 28px; left: 6px; } .chat-header-menu-btn { width: 28px; height: 28px; right: 6px; } .chat-list-settings-btn { width: 28px; height: 28px; right: 6px; } .nickname-modal-content { padding: 20px; } }
+.add-user-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+.add-user-modal.show { display: flex; }
+.add-user-modal-content { background: var(--bg-primary); border-radius: 12px; padding: 24px; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.add-user-modal-title { font-size: 18px; font-weight: 600; color: var(--text-primary); margin-bottom: 16px; }
+.add-user-modal-status { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; min-height: 20px; }
+.add-user-modal-qr { display: flex; justify-content: center; margin-bottom: 16px; min-height: 200px; align-items: center; }
+.add-user-modal-close { margin-top: 12px; padding: 8px 24px; border-radius: 6px; background: var(--bg-secondary); color: var(--text-primary); border: none; cursor: pointer; font-size: 14px; }
+.add-user-modal-spinner { width: 40px; height: 40px; border: 3px solid #F3F3F3; border-top: 3px solid var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto; }
+@media (max-width: 768px) { .chat-list-item { padding: 12px 14px; } .chat-list-item-avatar { width: 44px; height: 44px; font-size: 20px; } .chat-list-item-name { font-size: 15px; } .chat-list-item-msg { font-size: 12px; } .chat-back-btn { width: 28px; height: 28px; left: 8px; } .chat-header-menu-btn { width: 28px; height: 28px; right: 8px; } .chat-list-settings-btn { width: 28px; height: 28px; right: 8px; } .chat-list-add-btn { width: 28px; height: 28px; left: 8px; } }
+@media (max-width: 480px) { .chat-list-item { padding: 10px 12px; gap: 10px; } .chat-list-item-avatar { width: 40px; height: 40px; font-size: 18px; border-radius: 6px; } .chat-list-item-name { font-size: 14px; } .chat-list-item-msg { font-size: 11px; } .chat-back-btn { width: 28px; height: 28px; left: 6px; } .chat-header-menu-btn { width: 28px; height: 28px; right: 6px; } .chat-list-settings-btn { width: 28px; height: 28px; right: 6px; } .chat-list-add-btn { width: 28px; height: 28px; left: 6px; } .nickname-modal-content { padding: 20px; } }
 </style>
 </head>
 <body>
@@ -2680,6 +3007,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
     </div>
     <div id="chat-list-page" class="chat-list-container">
         <div class="chat-list-header">
+            <button id="chat-list-add-btn" class="chat-list-add-btn" title="添加用户"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
             <span class="chat-list-header-title">ZynWechat</span>
             <button id="chat-list-settings-btn" class="chat-list-settings-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
         </div>
@@ -2881,6 +3209,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         </div>
     </div>
 </div>
+<div id="add-user-modal" class="add-user-modal">
+    <div class="add-user-modal-content">
+        <div class="add-user-modal-title">添加新用户</div>
+        <div class="add-user-modal-status" id="add-user-status">正在生成二维码...</div>
+        <div class="add-user-modal-qr" id="add-user-qr"></div>
+        <button class="add-user-modal-close" id="add-user-close-btn">关闭</button>
+    </div>
+</div>
 <script>
 ''' + bot._generate_wasm_wrapper(session_token) + '''
 </script>
@@ -2981,12 +3317,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     if not cache_key or not all(c in '0123456789abcdef' for c in cache_key.lower()):
                         self.send_error(400)
                         return
-                    cached = bot._get_cached_media(cache_key)
+                    
+                    params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    user_param = params.get('user', [None])[0]
+                    
+                    cached = None
+                    if user_param:
+                        cached = bot._get_user_cached_media(user_param, cache_key)
+                    if not cached:
+                        cached = bot._get_cached_media(cache_key)
+                    
                     if not cached:
                         self.send_error(404)
                         return
                     media_data, mime, filename = cached
-                    params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                     is_download = params.get('download', [''])[0] == '1'
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
@@ -3379,6 +3723,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     if from_user not in self._context_tokens:
                         print(f"恢复会话: {from_user}")
                     self._context_tokens[from_user] = ctx_token
+                    self._save_user_token(from_user, ctx_token)
                     if self._current_user is None:
                         self._current_user = from_user
                     
@@ -3521,6 +3866,102 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         
         return text, media_info
     
+    def start_add_user_qrcode(self) -> str:
+        """生成新的二维码用于添加用户，在独立线程中运行，返回 qrcode_key"""
+        def _gen_qrcode():
+            try:
+                url = f"{self.ILINK_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                
+                qrcode_url = data.get("qrcode_img_content")
+                qrcode_key = data.get("qrcode")
+                
+                with self._add_user_lock:
+                    self._pending_qrcode = {
+                        "key": qrcode_key,
+                        "matrix": self._get_qrcode_matrix(qrcode_url) if qrcode_url else None,
+                        "status": "waiting",
+                        "started_at": time.time()
+                    }
+                
+                if qrcode_url:
+                    self._print_ascii_qrcode(qrcode_url)
+                    print(f"[添加用户] 二维码已生成，请扫描")
+                
+                # 轮询扫码状态
+                start = time.time()
+                while time.time() - start < 180:  # 最多等 3 分钟
+                    if not self._running:
+                        break
+                    try:
+                        status_url = f"{self.ILINK_BASE_URL}/ilink/bot/get_qrcode_status?qrcode={qrcode_key}"
+                        status_req = urllib.request.Request(status_url, headers={"iLink-App-ClientVersion": "1"})
+                        with urllib.request.urlopen(status_req, timeout=5) as status_resp:
+                            status = json.loads(status_resp.read().decode('utf-8'))
+                    except Exception:
+                        time.sleep(1)
+                        continue
+                    
+                    with self._add_user_lock:
+                        if status.get("status") == "scaned":
+                            if self._pending_qrcode:
+                                self._pending_qrcode["status"] = "scaned"
+                            print("[添加用户] 已扫码，请在手机上确认...")
+                        elif status.get("status") == "confirmed":
+                            token = status.get("bot_token")
+                            bot_id = status.get("ilink_bot_id")
+                            user_id = status.get("ilink_user_id")
+                            
+                            if token:
+                                self.token = token
+                                self.bot_id = bot_id
+                                self.user_id = user_id
+                                print(f"[添加用户] 连接成功! bot_id: {bot_id}")
+                                
+                                # 拉取新会话
+                                self._fetch_and_restore_conversations()
+                                self._save_config()
+                                
+                                if self._pending_qrcode:
+                                    self._pending_qrcode["status"] = "done"
+                            break
+                        elif status.get("status") == "expired":
+                            with self._add_user_lock:
+                                if self._pending_qrcode:
+                                    self._pending_qrcode["status"] = "expired"
+                            print("[添加用户] 二维码已过期")
+                            break
+                    
+                    time.sleep(2)
+                else:
+                    with self._add_user_lock:
+                        if self._pending_qrcode and self._pending_qrcode.get("status") == "waiting":
+                            self._pending_qrcode["status"] = "expired"
+                    print("[添加用户] 二维码超时")
+                    
+            except Exception as e:
+                print(f"[添加用户] 获取二维码失败: {e}")
+                with self._add_user_lock:
+                    self._pending_qrcode = {"key": "", "matrix": None, "status": "error", "error": str(e)}
+        
+        qrcode_key = uuid.uuid4().hex[:12]
+        # 设置临时状态
+        with self._add_user_lock:
+            self._pending_qrcode = {"key": qrcode_key, "matrix": None, "status": "generating"}
+        
+        thread = threading.Thread(target=_gen_qrcode, daemon=True)
+        thread.start()
+        return qrcode_key
+    
+    def get_add_user_status(self) -> dict:
+        """获取添加用户的状态"""
+        with self._add_user_lock:
+            if not self._pending_qrcode:
+                return {"status": "none", "message": "没有进行中的添加操作"}
+            return dict(self._pending_qrcode)
+    
     def start_polling(self):
         def poll():
             while self._running:
@@ -3596,6 +4037,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                             self._save_config()
                             if is_new:
                                 self._on_new_user(from_user)
+                                print(f"[USER] 新用户 {from_user}，已保存到独立文件夹")
                 except Exception as e:
                     time.sleep(0.5)
         thread = threading.Thread(target=poll, daemon=True)
@@ -4107,8 +4549,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
             try:
                 cdn_info = json.loads(msg['media_cdn']) if isinstance(msg['media_cdn'], str) else msg['media_cdn']
                 cache_key = self._media_cache_key(cdn_info)
-                if self._get_cached_media(cache_key):
+                
+                user_id = msg.get('from') if msg.get('type') == 'in' else msg.get('to')
+                
+                cached = None
+                if user_id:
+                    cached = self._get_user_cached_media(user_id, cache_key)
+                if not cached:
+                    cached = self._get_cached_media(cache_key)
+                if cached:
                     msg['media_cache_id'] = cache_key
+                    msg['media_cache_user'] = user_id
             except Exception:
                 pass
         return msg
@@ -4139,13 +4590,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         except Exception as e:
             print(f"[媒体缓存] 保存失败: {e}")
 
-    def _prefetch_media(self, cdn_media_info: dict, filename: str = ""):
+    def _prefetch_media(self, cdn_media_info: dict, filename: str = "", user_id: str = ""):
         try:
             cache_key = self._media_cache_key(cdn_media_info)
+            
+            if user_id and self._get_user_cached_media(user_id, cache_key):
+                return
             if self._get_cached_media(cache_key):
                 return
+            
             print(f"[媒体预取] 开始下载: {cache_key[:12]}...")
-            result = self.download_media(cdn_media_info, filename=filename)
+            result = self.download_media(cdn_media_info, filename=filename, user_id=user_id)
             if result:
                 print(f"[媒体预取] 完成: {cache_key[:12]}..., {len(result)} bytes")
             else:
@@ -4366,9 +4821,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     except Exception:
                         pass
 
-    def download_media(self, cdn_media_info: dict, filename: str = "") -> Optional[bytes]:
+    def download_media(self, cdn_media_info: dict, filename: str = "", user_id: str = "") -> Optional[bytes]:
         cache_key = self._media_cache_key(cdn_media_info)
 
+        if user_id:
+            cached = self._get_user_cached_media(user_id, cache_key)
+            if cached:
+                return cached[0]
+        
         cached = self._get_cached_media(cache_key)
         if cached:
             return cached[0]
@@ -4381,6 +4841,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 
         if wait_event:
             wait_event.wait(timeout=60)
+            if user_id:
+                cached = self._get_user_cached_media(user_id, cache_key)
+                if cached:
+                    return cached[0]
             cached = self._get_cached_media(cache_key)
             if cached:
                 return cached[0]
@@ -4440,6 +4904,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                         filename = filename.replace('.amr', '.wav') if filename else 'voice.wav'
 
                 self._save_media_cache(cache_key, decrypted, mime, filename)
+                
+                if user_id:
+                    self._save_user_media_cache(user_id, cache_key, decrypted, mime, filename)
 
                 return decrypted
 
