@@ -1,41 +1,119 @@
-# Zyn iLink ChatBox
--初中生个人开发-
-📜 许可证: Apache 2.0 | 🤝 完整版权可买断 | 仅供学习交流使用
-QQ交流群:
-756804051
-联系邮箱:
-3783762297@qq.com
+<div align="center">
+
+# 🚀 Zyn iLink ChatBox
+⭐ 如果觉得不错，欢迎给个Star支持一下！ ⭐
+
+**✨ 强大的微信iLink客户端 | 初中生独立开发 ✨**
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.7+-green.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20Termux-lightgrey)](https://github.com/zynsync/Zyn-iLink-ChatBox)
+[![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)]()
+
+</div>
+
+---
+
+## 📋 基本信息
+
+> 👨‍💻 **开发者**：ZynSync  
+> 📜 **开源协议**：Apache 2.0  
+> 💼 **商业授权**：完整版权可买断  
+> 📚 **使用限制**：仅供学习交流使用
+
+### 📞 联系我们
+
+| 渠道 | 联系方式 |
+|:----:|:--------:|
+| 💬 QQ交流群 | `756804051` |
+| 📧 联系邮箱 | `3783762297@qq.com` |
+
+---
 
 ## ✨ 功能特性
-- ✅ 微信官方iLink接口，扫码一键连接
-- ✅ 支持文本、图片、语音、视频、文件收发
-- ✅ 内置Web管理界面，手机电脑都能用
-- ✅ AI自动回复，支持自定义系统提示词
-- ✅ 媒体文件自动下载、转码和缓存
-- ✅ 完美兼容Windows、Linux、Termux
-- ✅ 零依赖复杂框架，单文件即可运行
+
+<div align="center">
+
+| 特性 | 说明 |
+|:----:|:-----|
+| 🔌 **微信iLink接口** | 官方接口，扫码一键连接 |
+| 💬 **全媒体支持** | 文本、图片、语音、视频、文件收发 |
+| 🌐 **Web管理界面** | 内置界面，手机电脑都能用! |
+| 🤖 **AI接口** | 支持调用 AI 的API |
+| 📦 **媒体处理** | 自动下载、转码和缓存 |
+| 💻 **跨平台兼容** | Windows、Linux、Termux完美运行 |
+| 🚀 **零依赖** | 不依赖复杂框架，单文件即可运行 |
+
+</div>
+
+---
 
 ## 🚀 快速开始
-1. 克隆仓库
-   ```bash
-   git clone https://github.com/zynsync/Zyn-iLink-ChatBox.git
-   cd Zyn-iLink-ChatBox
-   ```
-2.安装依赖
-  ```bash
-  pip install qrcode pycryptodome
-  ```
-3.运行
-  ```bash
-  python Zyn-iLink-ChatBox.py
 
-  ```
-  更推荐文件夹 启动器-带热更新   里面的启动器
-***注意!对方扫码连接后，需要先让微信用户发一条消息获取token才能正常聊天!***
+### 1️⃣ 克隆仓库
 
+```bash
+git clone https://github.com/zynsync/Zyn-iLink-ChatBox.git
+cd Zyn-iLink-ChatBox
+```
 
+2️⃣ 安装依赖
 
+```bash
+pip install qrcode pycryptodome
+```
 
+3️⃣ 运行程序
 
-# 赞助
-<img width="1080" height="1621" alt="Image" src="https://github.com/user-attachments/assets/25c04fca-4b30-4e10-8ce8-3e7ee627f203" />
+```bash
+python Zyn-iLink-ChatBox.py
+```
+
+💡 提示：更推荐使用 启动器-带热更新 文件夹内的启动器！
+
+---
+
+⚠️ 重要提醒
+
+🔔 注意：对方扫码连接后，需要先让微信用户发一条消息获取token才能正常聊天！
+
+---
+
+💰 赞助支持
+
+如果这个项目对您有帮助，欢迎扫码赞助支持！
+您的支持是我持续更新的动力！ 🙏
+
+<div align="center">
+  <img width="400" alt="赞助二维码" src="https://github.com/user-attachments/assets/25c04fca-4b30-4e10-8ce8-3e7ee627f203" />
+</div>
+
+---
+
+📜 开源协议
+
+```
+Copyright © 2024 Zyn iLink ChatBox
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+---
+
+<div align="center">
+
+⭐ 如果觉得不错，欢迎给个Star支持一下！ ⭐
+
+Made with ❤️ by ZynSync
+
+</div>
