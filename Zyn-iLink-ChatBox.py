@@ -338,6 +338,7 @@ class WeChatiLinkBot:
     MEDIA_TYPE_NAMES = {2: "图片", 3: "语音", 4: "文件", 5: "视频"}
     MEDIA_TYPE_PREFIXES = {"image": "[图片]", "video": "[视频]", "file": "[文件]", "voice": "[语音]"}
     EXPIRED_CODES = {-14, 40014, 1002}
+    SCRIPT_VERSION = "2.0.0"
     AUTHOR_NAME = "ZynSync"
     
     def __init__(self):
@@ -1938,13 +1939,25 @@ class WeChatiLinkBot:
 
     const _loadAbout = async function() {
         const authorEl = document.getElementById("about-author");
+        const versionEl = document.getElementById("about-version");
         if (authorEl) authorEl.textContent = "加载中...";
+        if (versionEl) versionEl.textContent = "加载中...";
         const e = await _get("about");
-        if (e && authorEl) {
-            authorEl.textContent = e.author || "未知";
-        } else if (authorEl) {
-            authorEl.textContent = "获取失败";
+        if (e) {
+            if (authorEl) authorEl.textContent = e.author || "未知";
+            if (versionEl) versionEl.textContent = e.version || "未知";
+        } else {
+            if (authorEl) authorEl.textContent = "获取失败";
+            if (versionEl) versionEl.textContent = "获取失败";
         }
+    };
+
+    const _onAvatarClick = function() {
+        const img = document.querySelector(".about-logo-img");
+        if (!img) return;
+        img.classList.remove("spinning");
+        void img.offsetWidth;
+        img.classList.add("spinning");
     };
     
     const _initTheme = function() {
@@ -2238,6 +2251,11 @@ class WeChatiLinkBot:
         if (aboutItem) aboutItem.addEventListener("click", function() { _showSettingsPage('settings-about'); });
         const aboutBackBtn = document.getElementById("about-back-btn");
         if (aboutBackBtn) aboutBackBtn.addEventListener("click", function() { _showSettingsPage('settings-main'); });
+        const aboutLogoImg = document.querySelector(".about-logo-img");
+        if (aboutLogoImg) {
+            aboutLogoImg.addEventListener("click", _onAvatarClick);
+            aboutLogoImg.addEventListener("animationend", function() { aboutLogoImg.classList.remove("spinning"); });
+        }
         const themeBtn = document.getElementById("theme-toggle-btn");
         if (themeBtn) themeBtn.addEventListener("click", function(ev) { ev.stopPropagation(); _toggleTheme(); });
         const themeItem = document.getElementById("settings-theme-item");
@@ -2579,7 +2597,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .settings-save:hover { background: var(--accent-hover); }
 .about-logo { display: flex; flex-direction: column; align-items: center; padding: 24px 0 16px; }
 .about-logo-circle { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600; box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
-.about-logo-img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
+.about-logo-img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(7,193,96,0.25); cursor: pointer; transition: box-shadow 0.2s; }
+.about-logo-img:active { box-shadow: 0 4px 16px rgba(7,193,96,0.45); }
+.about-logo-img.spinning { animation: aboutLogoSpin 0.7s cubic-bezier(0.4, 0, 0.2, 1); }
+@keyframes aboutLogoSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .about-logo-name { margin-top: 12px; font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .about-info { margin-top: 8px; background: var(--setting-item-bg); border-radius: 10px; overflow: hidden; }
 .about-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; }
@@ -2817,7 +2838,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     </div>
                     <div class="about-row">
                         <div class="about-label">脚本版本号</div>
-                        <div class="about-value" id="about-version">2.0.0</div>
+                        <div class="about-value" id="about-version">加载中...</div>
                     </div>
                 </div>
             </div>
@@ -2951,6 +2972,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 
             def _serve_about(self):
                 self._send_json({
+                    "version": bot.SCRIPT_VERSION,
                     "author": bot.AUTHOR_NAME
                 })
             
