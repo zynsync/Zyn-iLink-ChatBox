@@ -1939,12 +1939,16 @@ class WeChatiLinkBot:
 
     const _loadAbout = async function() {
         const authorEl = document.getElementById("about-author");
+        const versionEl = document.getElementById("about-version");
         if (authorEl) authorEl.textContent = "加载中...";
+        if (versionEl) versionEl.textContent = "加载中...";
         const e = await _get("about");
-        if (e && authorEl) {
-            authorEl.textContent = e.author || "未知";
-        } else if (authorEl) {
-            authorEl.textContent = "获取失败";
+        if (e) {
+            if (authorEl) authorEl.textContent = e.author || "未知";
+            if (versionEl) versionEl.textContent = e.version || "未知";
+        } else {
+            if (authorEl) authorEl.textContent = "获取失败";
+            if (versionEl) versionEl.textContent = "获取失败";
         }
     };
     
@@ -2579,8 +2583,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .settings-save { width: 100%; padding: 12px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 500; cursor: pointer; margin-top: 8px; }
 .settings-save:hover { background: var(--accent-hover); }
 .about-logo { display: flex; flex-direction: column; align-items: center; padding: 24px 0 16px; }
-.about-logo-circle { width: 72px; height: 72px; border-radius: 50%; background: #FB7299; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600; box-shadow: 0 4px 12px rgba(251,114,153,0.25); text-decoration: none; transition: transform 0.2s, box-shadow 0.2s; }
-.about-logo-circle:hover { transform: scale(1.05); box-shadow: 0 6px 16px rgba(251,114,153,0.35); }
+.about-logo-circle { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600; box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
 .about-logo-name { margin-top: 12px; font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .about-info { margin-top: 8px; background: var(--setting-item-bg); border-radius: 10px; overflow: hidden; }
 .about-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; }
@@ -2808,7 +2811,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         <div class="settings-scroll">
             <div class="settings-body">
                 <div class="about-logo">
-                    <a href="https://space.bilibili.com/3690986949577203" target="_blank" rel="noopener noreferrer" class="about-logo-circle">Zyn</a>
+                    <div class="about-logo-circle">Zyn</div>
                     <div class="about-logo-name">Zyn iLink ChatBox</div>
                 </div>
                 <div class="about-info">
@@ -2818,7 +2821,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     </div>
                     <div class="about-row">
                         <div class="about-label">脚本版本号</div>
-                        <div class="about-value" id="about-version">v2.0.0</div>
+                        <div class="about-value" id="about-version">加载中...</div>
                     </div>
                 </div>
             </div>
