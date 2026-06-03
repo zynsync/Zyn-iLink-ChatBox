@@ -338,6 +338,7 @@ class WeChatiLinkBot:
     MEDIA_TYPE_NAMES = {2: "图片", 3: "语音", 4: "文件", 5: "视频"}
     MEDIA_TYPE_PREFIXES = {"image": "[图片]", "video": "[视频]", "file": "[文件]", "voice": "[语音]"}
     EXPIRED_CODES = {-14, 40014, 1002}
+    SCRIPT_VERSION = "2.0.9"
     AUTHOR_NAME = "ZynSync"
     
     def __init__(self):
@@ -1933,18 +1934,108 @@ class WeChatiLinkBot:
             _loadAIConfig();
         } else if (pageId === 'settings-about') {
             _loadAbout();
+            _initAvatar3D();
         }
     };
 
     const _loadAbout = async function() {
         const authorEl = document.getElementById("about-author");
+        const versionEl = document.getElementById("about-version");
         if (authorEl) authorEl.textContent = "加载中...";
+        if (versionEl) versionEl.textContent = "加载中...";
         const e = await _get("about");
-        if (e && authorEl) {
-            authorEl.textContent = e.author || "未知";
-        } else if (authorEl) {
-            authorEl.textContent = "获取失败";
+        if (e) {
+            if (authorEl) authorEl.textContent = e.author || "未知";
+            if (versionEl) versionEl.textContent = e.version || "未知";
+        } else {
+            if (authorEl) authorEl.textContent = "获取失败";
+            if (versionEl) versionEl.textContent = "获取失败";
         }
+    };
+
+    let _avatar3DInited = false;
+    let _avatar3DState = null;
+    const _initAvatar3D = function() {
+        const container = document.getElementById("about-avatar-3d");
+        if (!container) return;
+        if (typeof THREE === 'undefined') return;
+        if (_avatar3DInited) {
+            if (_avatar3DState) _avatar3DState.renderer.render(_avatar3DState.scene, _avatar3DState.camera);
+            return;
+        }
+        const img = document.getElementById("about-avatar-img");
+        const avatarUrl = img ? img.getAttribute("src") : "";
+
+        const size = 72;
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(size, size);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        container.appendChild(renderer.domElement);
+        renderer.domElement.style.width = size + "px";
+        renderer.domElement.style.height = size + "px";
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+        camera.position.set(0, 0, 2.2);
+
+        const geometry = new THREE.PlaneGeometry(1, 1);
+        let mesh = null;
+
+        const draw = function() {
+            if (mesh) renderer.render(scene, camera);
+        };
+
+        if (img) img.style.display = "none";
+
+        const loader = new THREE.TextureLoader();
+        loader.crossOrigin = "anonymous";
+        loader.load(
+            avatarUrl,
+            function(texture) {
+                texture.anisotropy = renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1;
+                const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                mesh = new THREE.Mesh(geometry, material);
+                scene.add(mesh);
+                draw();
+            },
+            undefined,
+            function() {
+                const material = new THREE.MeshBasicMaterial({ color: 0x07C160 });
+                mesh = new THREE.Mesh(geometry, material);
+                scene.add(mesh);
+                draw();
+            }
+        );
+
+        let animating = false;
+        const _spin = function() {
+            if (animating || !mesh) return;
+            animating = true;
+            const duration = 1600;
+            const start = performance.now();
+            const totalAngle = Math.PI * 4;
+            const step = function() {
+                const elapsed = performance.now() - start;
+                const t = Math.min(elapsed / duration, 1);
+                const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                const angle = totalAngle * eased;
+                mesh.rotation.y = angle;
+                mesh.rotation.x = Math.sin(angle) * 0.25;
+                draw();
+                if (t < 1) {
+                    requestAnimationFrame(step);
+                } else {
+                    mesh.rotation.set(0, 0, 0);
+                    draw();
+                    animating = false;
+                }
+            };
+            step();
+        };
+        renderer.domElement.addEventListener("click", _spin);
+
+        _avatar3DState = { renderer: renderer, scene: scene, camera: camera };
+        _avatar3DInited = true;
     };
     
     const _initTheme = function() {
@@ -2580,6 +2671,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 .about-logo { display: flex; flex-direction: column; align-items: center; padding: 24px 0 16px; }
 .about-logo-circle { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 600; box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
 .about-logo-img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
+.about-avatar-3d { width: 72px; height: 72px; position: relative; display: flex; align-items: center; justify-content: center; }
+.about-avatar-3d canvas { display: block; border-radius: 50%; cursor: pointer; box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
+.about-avatar-img { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: var(--bg-secondary); box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
 .about-logo-name { margin-top: 12px; font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .about-info { margin-top: 8px; background: var(--setting-item-bg); border-radius: 10px; overflow: hidden; }
 .about-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; }
@@ -2807,7 +2901,9 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         <div class="settings-scroll">
             <div class="settings-body">
                 <div class="about-logo">
-                    <img class="about-logo-img" src="https://ms.188850.xyz/file/default/1780497560383_retouch_2026050219212691.png" alt="作者头像" />
+                    <div class="about-avatar-3d" id="about-avatar-3d">
+                        <img class="about-avatar-img" id="about-avatar-img" src="https://ms.188850.xyz/file/default/1780497560383_retouch_2026050219212691.png" alt="作者头像" />
+                    </div>
                     <div class="about-logo-name">Zyn iLink ChatBox</div>
                 </div>
                 <div class="about-info">
@@ -2817,7 +2913,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     </div>
                     <div class="about-row">
                         <div class="about-label">脚本版本号</div>
-                        <div class="about-value" id="about-version">2.0.0</div>
+                        <div class="about-value" id="about-version">加载中...</div>
                     </div>
                 </div>
             </div>
@@ -2860,6 +2956,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         </div>
     </div>
 </div>
+<script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 ''' + bot._generate_wasm_wrapper(session_token) + '''
 </script>
@@ -2951,6 +3048,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
 
             def _serve_about(self):
                 self._send_json({
+                    "version": bot.SCRIPT_VERSION,
                     "author": bot.AUTHOR_NAME
                 })
             
@@ -4462,7 +4560,7 @@ def main():
     print("╔" + "═" * 58 + "╗")
     print("║" + " " * 12 + "Zynsync iLink ChatBox" + " " * 18 + "║")
     print("║" + " " * 16 + "使用微信官方接口" + " " * 22 + "║")
-    print("║" + " " * 20 + "v2.0.9" + " " * 26 + "║")
+    print("║" + " " * 20 + f"v{WeChatiLinkBot.SCRIPT_VERSION}" + " " * 26 + "║")
     print("╚" + "═" * 58 + "╝")
     
     if is_termux():
