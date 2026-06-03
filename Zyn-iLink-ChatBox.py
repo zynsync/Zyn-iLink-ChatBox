@@ -1727,23 +1727,25 @@ class WeChatiLinkBot:
                     _renderAddUserQR(data.matrix);
                 }
                 
-                if (data.qrcode_status === "scaned" && statusEl) {
+                var st = data.qrcode_status;
+                if (st === "scaned" && statusEl) {
                     statusEl.textContent = "已扫码，请在手机上确认...";
-                } else if (data.qrcode_status === "done") {
-                    if (statusEl) statusEl.textContent = "添加成功！";
+                } else if (st === "done") {
+                    if (statusEl) statusEl.textContent = "连接成功！正在刷新用户列表...";
                     if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
-                    _toast("新用户已添加！");
-                    _state.users = data.users || [];
+                    // 从服务器重新加载用户列表
+                    await _loadUsers();
                     _renderChatList();
                     _loadChatListPreviews();
+                    _toast("新用户已添加！");
                     setTimeout(_closeAddUserModal, 1500);
-                } else if (data.qrcode_status === "expired") {
-                    if (statusEl) statusEl.textContent = "二维码已过期，请重新点击加号";
+                } else if (st === "expired" || st === "timeout") {
+                    if (statusEl) statusEl.textContent = "二维码已过期，请重新点击加号重试";
                     if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
-                } else if (data.qrcode_status === "error") {
-                    if (statusEl) statusEl.textContent = "获取二维码失败，请重试";
+                } else if (st === "error") {
+                    if (statusEl) statusEl.textContent = "获取失败，请重试";
                     if (_addUserPollTimer) { clearInterval(_addUserPollTimer); _addUserPollTimer = null; }
-                } else if (data.qrcode_status === "waiting" && statusEl) {
+                } else if (st === "waiting" && statusEl) {
                     statusEl.textContent = "请使用微信扫码添加新用户";
                 }
             } catch(e) {}
@@ -3867,7 +3869,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         return text, media_info
     
     def start_add_user_qrcode(self) -> str:
-        """生成新的二维码用于添加用户，在独立线程中运行，返回 qrcode_key"""
+        """生成新的二维码用于添加用户，在独立线程中运行，返回 qrcode_key
+        重要：不会替换已有的 bot token，保证已有连接不受影响。"""
         def _gen_qrcode():
             try:
                 url = f"{self.ILINK_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3"
@@ -3888,11 +3891,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 
                 if qrcode_url:
                     self._print_ascii_qrcode(qrcode_url)
-                    print(f"[添加用户] 二维码已生成，请扫描")
+                    print(f"[添加用户] 二维码已生成，请扫描（不会影响已有连接）")
                 
                 # 轮询扫码状态
-                start = time.time()
-                while time.time() - start < 180:  # 最多等 3 分钟
+                start_ts = time.time()
+                while time.time() - start_ts < 120:  # 最多等 2 分钟
                     if not self._running:
                         break
                     try:
@@ -3904,42 +3907,58 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                         time.sleep(1)
                         continue
                     
+                    st = status.get("status", "")
+                    
                     with self._add_user_lock:
-                        if status.get("status") == "scaned":
+                        if st == "scaned":
                             if self._pending_qrcode:
                                 self._pending_qrcode["status"] = "scaned"
                             print("[添加用户] 已扫码，请在手机上确认...")
-                        elif status.get("status") == "confirmed":
-                            token = status.get("bot_token")
-                            bot_id = status.get("ilink_bot_id")
-                            user_id = status.get("ilink_user_id")
+                        elif st == "confirmed":
+                            new_token = status.get("bot_token")
+                            print(f"[添加用户] 扫码确认成功！已有 token={bool(self.token)}, 新 token={bool(new_token)}")
                             
-                            if token:
-                                self.token = token
-                                self.bot_id = bot_id
-                                self.user_id = user_id
-                                print(f"[添加用户] 连接成功! bot_id: {bot_id}")
-                                
-                                # 拉取新会话
+                            # 关键修复：如果已有 token，不要替换！保持已有连接有效
+                            if new_token and not self.token:
+                                # 仅在首次登录时设置 token
+                                self.token = new_token
+                                self.bot_id = status.get("ilink_bot_id")
+                                self.user_id = status.get("ilink_user_id")
+                                print(f"[添加用户] 首次登录，设置 token")
+                            elif new_token and self.token:
+                                # 已有 token，只更新配置中的 token 以备后用
+                                print(f"[添加用户] 保持已有 token 不变，扫描者将成为新用户")
+                            
+                            # 使用当前 token 拉取最新会话（包含新旧所有用户）
+                            if self.token:
+                                old_cursor = self._cursor
+                                self._cursor = ""  # 重置 cursor 以获取完整会话列表
                                 self._fetch_and_restore_conversations()
+                                if not self._context_tokens:
+                                    self._cursor = old_cursor
+                                    self._fetch_and_restore_conversations()
                                 self._save_config()
-                                
+                            else:
+                                print("[添加用户] 警告：没有可用的 bot token")
+                            
+                            with self._add_user_lock:
                                 if self._pending_qrcode:
                                     self._pending_qrcode["status"] = "done"
+                                    self._pending_qrcode["users"] = list(self._context_tokens.keys())
                             break
-                        elif status.get("status") == "expired":
+                        elif st == "expired":
                             with self._add_user_lock:
                                 if self._pending_qrcode:
                                     self._pending_qrcode["status"] = "expired"
                             print("[添加用户] 二维码已过期")
                             break
                     
-                    time.sleep(2)
+                    time.sleep(1.5)
                 else:
                     with self._add_user_lock:
                         if self._pending_qrcode and self._pending_qrcode.get("status") == "waiting":
-                            self._pending_qrcode["status"] = "expired"
-                    print("[添加用户] 二维码超时")
+                            self._pending_qrcode["status"] = "timeout"
+                    print("[添加用户] 二维码等待超时")
                     
             except Exception as e:
                 print(f"[添加用户] 获取二维码失败: {e}")
@@ -3947,7 +3966,6 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                     self._pending_qrcode = {"key": "", "matrix": None, "status": "error", "error": str(e)}
         
         qrcode_key = uuid.uuid4().hex[:12]
-        # 设置临时状态
         with self._add_user_lock:
             self._pending_qrcode = {"key": qrcode_key, "matrix": None, "status": "generating"}
         
