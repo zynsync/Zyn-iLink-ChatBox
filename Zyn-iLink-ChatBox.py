@@ -96,9 +96,11 @@ def setup_termux_compat():
             print(f"[TERMUX]   ⚠ {tool} 未找到")
     
     # 检查 termux-api（Toast 提醒功能依赖）
-    if shutil.which("termux-toast"):
+    try:
+        subprocess.run(["termux-toast", "--help"], timeout=3,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print(f"[TERMUX]   ✓ termux-api 可用（消息提醒已就绪）")
-    else:
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
         print(f"[TERMUX]   ⚠ termux-api 未安装（消息提醒不可用）")
         print(f"[TERMUX]   如需新消息提醒，请手动安装：")
         print(f"[TERMUX]     # 换国内镜像（推荐）")

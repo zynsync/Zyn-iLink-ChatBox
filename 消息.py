@@ -1,24 +1,8 @@
 #!/usr/bin/env python
 
 import subprocess
-import shutil
 
-# 缓存 termux-api 是否可用的状态，避免重复检测
-_termux_api_available = None
 _install_hint_shown = False
-
-def _check_termux_api():
-    """检查 termux-toast 是否可用"""
-    global _termux_api_available
-    if _termux_api_available is not None:
-        return _termux_api_available
-
-    if shutil.which("termux-toast"):
-        _termux_api_available = True
-        return True
-
-    _termux_api_available = False
-    return False
 
 def _print_install_hint():
     """打印 termux-api 安装提示（含国内镜像），只提示一次"""
@@ -46,17 +30,14 @@ def _print_install_hint():
 
 def send_toast(message: str):
     """发送 Toast 提醒（收到新消息时调用）"""
-    global _termux_api_available
-
-    if not _check_termux_api():
-        _print_install_hint()
-        return False
-
     try:
-        subprocess.run(["termux-toast", message], timeout=3)
+        subprocess.run(["termux-toast", message], timeout=5, check=True)
         return True
     except FileNotFoundError:
-        _termux_api_available = False
+        _print_install_hint()
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"[消息提醒] termux-toast 调用失败: {e}")
         _print_install_hint()
         return False
     except Exception as e:
