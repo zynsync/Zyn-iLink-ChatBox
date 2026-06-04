@@ -809,7 +809,9 @@ class WeChatiLinkBot:
             self._schedule_active_message(user_id)
     
     def _load_messages(self):
-        """加载所有用户的消息（兼容旧格式自动迁移）"""
+        """加载所有用户的消息（兼容旧格式自动迁移）
+        注意：此方法在 __init__ 中调用，此时 _context_tokens 为空，
+        所以只处理旧格式迁移。实际消息加载在 load_config 后进行。"""
         try:
             if Path(MESSAGES_FILE).exists():
                 with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
@@ -832,24 +834,23 @@ class WeChatiLinkBot:
                         if new_msgs:
                             all_msgs = existing + new_msgs
                             all_msgs.sort(key=lambda m: m.get('id', 0))
-                            data = {
+                            save_data = {
                                 "user_id": uid,
                                 "messages": all_msgs,
                                 "count": len(all_msgs),
                                 "saved_at": datetime.now().isoformat()
                             }
                             with open(self._get_user_messages_file(uid), "w", encoding="utf-8") as f:
-                                json.dump(data, f, ensure_ascii=False, indent=2)
+                                json.dump(save_data, f, ensure_ascii=False, indent=2)
                     
                     bak_file = MESSAGES_FILE + ".bak"
                     shutil.move(MESSAGES_FILE, bak_file)
                     print(f"[MSG] 迁移完成，旧文件已备份为 {bak_file}")
-            
-            self._load_all_user_messages()
         except Exception as e:
-            print(f"[MSG] 加载历史消息失败: {e}")
-            self._messages = []
-            self._last_msg_id = 0
+            print(f"[MSG] 消息迁移失败: {e}")
+        
+        self._messages = []
+        self._last_msg_id = 0
     
     def _save_messages(self):
         """保存消息到各用户文件夹"""
@@ -982,8 +983,11 @@ class WeChatiLinkBot:
                     # 旧数据：默认属于主 token
                     self._user_token_map[user_id] = self.token
             
+            # 恢复 _context_tokens 后加载历史消息
+            self._load_all_user_messages()
+            
             if self.token:
-                print(f"加载配置成功，{len(self._context_tokens)} 个会话，{len(self._bot_accounts)} 个 bot 账号")
+                print(f"加载配置成功，{len(self._context_tokens)} 个会话，{len(self._bot_accounts)} 个 bot 账号，{len(self._messages)} 条消息")
                 if self._current_user:
                     print(f"当前会话用户: {self._current_user}")
                 for user_id in self._context_tokens.keys():
@@ -3328,11 +3332,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
             def _serve_users(self):
                 users = []
                 for uid in bot._context_tokens:
-                    users.append({
-                        'id': uid,
-                        'is_current': uid == bot._current_user
-                    })
-                self._send_json(users)
+                    users.append(uid)
+                self._send_json({'users': users, 'current_user': bot._current_user})
             
             def _serve_ai_config(self):
                 safe_config = {
