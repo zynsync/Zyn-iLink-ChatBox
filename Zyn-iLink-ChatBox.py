@@ -28,9 +28,9 @@ import urllib.error
 import urllib.parse
 
 try:
-    from 消息 import send_notification as _termux_notify
+    from 消息 import send_toast as _termux_toast
 except ImportError:
-    _termux_notify = None
+    _termux_toast = None
 
 def is_termux():
     if sys.platform != "linux":
@@ -95,12 +95,12 @@ def setup_termux_compat():
         else:
             print(f"[TERMUX]   ⚠ {tool} 未找到")
     
-    # 检查 termux-api（消息通知功能依赖）
-    if shutil.which("termux-notification"):
-        print(f"[TERMUX]   ✓ termux-api 可用（消息通知已就绪）")
+    # 检查 termux-api（Toast 提醒功能依赖）
+    if shutil.which("termux-toast"):
+        print(f"[TERMUX]   ✓ termux-api 可用（消息提醒已就绪）")
     else:
-        print(f"[TERMUX]   ⚠ termux-api 未安装（消息通知不可用）")
-        print(f"[TERMUX]   如需新消息通知，请手动安装：")
+        print(f"[TERMUX]   ⚠ termux-api 未安装（消息提醒不可用）")
+        print(f"[TERMUX]   如需新消息提醒，请手动安装：")
         print(f"[TERMUX]     # 换国内镜像（推荐）")
         print(f"[TERMUX]     sed -i 's@^\\(deb.*stable main\\)$@#\\1\\ndeb https://mirrors.tuna.tsinghua.edu.cn/termux/termux-packages-24 stable main@' $PREFIX/etc/apt/sources.list")
         print(f"[TERMUX]     apt update && apt upgrade -y")
@@ -4154,12 +4154,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                                 threading.Thread(target=self._prefetch_media, args=(cdn_media, _prefetch_fn, from_user), daemon=True).start()
                             
                             print(f"\n[收到{media_info['type']}] {from_user}: {media_info.get('filename', '')}")
-                            if is_termux() and _termux_notify:
-                                _termux_notify(f"收到{media_info['type']}", f"{from_user}: {media_info.get('filename', '')}")
+                            if is_termux() and _termux_toast:
+                                _termux_toast(f"收到{media_info['type']}: {from_user}")
                         elif text:
                             print(f"\n[收到消息] {from_user}: {text}")
-                            if is_termux() and _termux_notify:
-                                _termux_notify(from_user, text)
+                            if is_termux() and _termux_toast:
+                                _termux_toast(f"{from_user}: {text}")
                         
                         if msg_text:
                             new_msg = {
