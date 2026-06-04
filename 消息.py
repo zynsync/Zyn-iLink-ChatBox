@@ -5,7 +5,6 @@ import subprocess
 _install_hint_shown = False
 
 def _print_install_hint():
-    """打印 termux-api 安装提示（含国内镜像），只提示一次"""
     global _install_hint_shown
     if _install_hint_shown:
         return
@@ -29,7 +28,6 @@ def _print_install_hint():
     print("=" * 50)
 
 def send_toast(message: str):
-    """发送 Toast 提醒（收到新消息时调用）"""
     try:
         subprocess.run(["termux-toast", message], timeout=5, check=True)
         return True
@@ -45,7 +43,6 @@ def send_toast(message: str):
         return False
 
 def test_toast():
-    """测试 Toast 功能"""
     print("正在发送 Toast 通知...")
     result = send_toast("这是一条测试消息")
     if result:

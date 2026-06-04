@@ -27,11 +27,9 @@ import urllib.request
 import urllib.error
 import urllib.parse
 
-# Termux Toast 提醒（收到新消息时调用）
 _termux_toast_hint_shown = False
 
 def _termux_toast(message: str):
-    """在 Termux 环境下发送 Toast 提醒"""
     global _termux_toast_hint_shown
     try:
         subprocess.run(["termux-toast", message], timeout=5)
@@ -120,7 +118,6 @@ def setup_termux_compat():
         else:
             print(f"[TERMUX]   ⚠ {tool} 未找到")
     
-    # 检查 termux-api（Toast 提醒功能依赖）
     try:
         subprocess.run(["termux-toast", "--help"], timeout=3,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
