@@ -370,10 +370,17 @@ class WeChatiLinkBot:
         self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._media_downloading: Dict[str, threading.Event] = {}
         self._media_download_lock = threading.Lock()
-        self._user_threads: Dict[str, threading.Thread] = {}
-        self._user_msg_locks: Dict[str, threading.Lock] = {}
         self._add_user_lock = threading.Lock()
         self._pending_qrcode: Optional[dict] = None
+        self._msg_lock = threading.Lock()
+        
+        # 多账号架构：每个 bot_token 是一个独立连接
+        # _bot_accounts: {token: {"bot_id": str, "user_id": str, "cursor": str, "context_tokens": {user_id: ctx_token}}}
+        self._bot_accounts: Dict[str, dict] = {}
+        # _user_token_map: {user_id: bot_token} — 用户属于哪个 bot 账号
+        self._user_token_map: Dict[str, str] = {}
+        # 轮询线程引用
+        self._poll_threads: List[threading.Thread] = []
         
         self._load_messages()
     
@@ -430,6 +437,28 @@ class WeChatiLinkBot:
         expired = [t for t, exp in self._session_tokens.items() if exp <= now]
         for t in expired:
             del self._session_tokens[t]
+    
+    def _get_token_for_user(self, user_id: str) -> Optional[str]:
+        """获取用户所属的 bot token"""
+        return self._user_token_map.get(user_id) or self.token
+    
+    def _register_user_to_account(self, user_id: str, ctx_token: str, bot_token: str):
+        """将用户注册到对应的 bot 账号"""
+        self._context_tokens[user_id] = ctx_token
+        self._user_token_map[user_id] = bot_token
+        
+        if bot_token not in self._bot_accounts:
+            self._bot_accounts[bot_token] = {
+                "bot_id": self.bot_id or "",
+                "user_id": self.user_id or "",
+                "cursor": "",
+                "context_tokens": {}
+            }
+        self._bot_accounts[bot_token]["context_tokens"][user_id] = ctx_token
+        
+        self._save_user_token(user_id, ctx_token)
+        if not self._current_user:
+            self._current_user = user_id
     
     def _get_user_dir(self, user_id: str) -> Path:
         """获取用户数据目录"""
@@ -834,23 +863,24 @@ class WeChatiLinkBot:
             print(f"[MSG] 保存消息失败: {e}")
     
     def _add_message_to_history(self, msg: dict):
-        if not hasattr(self, '_last_msg_id'):
-            self._last_msg_id = 0
-        self._last_msg_id += 1
-        msg['id'] = self._last_msg_id
-        
-        if 'time' not in msg:
-            msg['time'] = datetime.now().strftime('%H:%M:%S')
-        
-        self._messages.append(msg)
-        print(f"[MSG] 添加消息: id={msg['id']}, type={msg.get('type')}, text={msg.get('text', '')[:50]}...")
-        
-        target_id = msg.get('to') or msg.get('from')
-        if target_id:
-            user_msgs = [m for m in self._messages if m.get('to') == target_id or m.get('from') == target_id]
-            if len(user_msgs) > self._max_messages_per_user:
-                remove_ids = {m.get('id') for m in user_msgs[:len(user_msgs) - self._max_messages_per_user]}
-                self._messages = [m for m in self._messages if m.get('id') not in remove_ids]
+        with self._msg_lock:
+            if not hasattr(self, '_last_msg_id'):
+                self._last_msg_id = 0
+            self._last_msg_id += 1
+            msg['id'] = self._last_msg_id
+            
+            if 'time' not in msg:
+                msg['time'] = datetime.now().strftime('%H:%M:%S')
+            
+            self._messages.append(msg)
+            print(f"[MSG] 添加消息: id={msg['id']}, type={msg.get('type')}, text={msg.get('text', '')[:50]}...")
+            
+            target_id = msg.get('to') or msg.get('from')
+            if target_id:
+                user_msgs = [m for m in self._messages if m.get('to') == target_id or m.get('from') == target_id]
+                if len(user_msgs) > self._max_messages_per_user:
+                    remove_ids = {m.get('id') for m in user_msgs[:len(user_msgs) - self._max_messages_per_user]}
+                    self._messages = [m for m in self._messages if m.get('id') not in remove_ids]
         
         threading.Thread(target=self._save_messages, daemon=True).start()
     
@@ -911,9 +941,11 @@ class WeChatiLinkBot:
             "cursor": self._cursor,
             "context_tokens": self._context_tokens,
             "current_user": self._current_user,
+            "bot_accounts": {k: v for k, v in self._bot_accounts.items()},
+            "user_token_map": dict(self._user_token_map),
         }
         with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
+            json.dump(config, f, indent=2, ensure_ascii=False)
         try:
             Path(CONFIG_FILE).chmod(0o600)
         except (OSError, AttributeError, NotImplementedError):
@@ -932,19 +964,26 @@ class WeChatiLinkBot:
             self._cursor = config.get("cursor", "")
             self._context_tokens = config.get("context_tokens", {})
             self._current_user = config.get("current_user")
+            self._bot_accounts = config.get("bot_accounts", {})
+            self._user_token_map = config.get("user_token_map", {})
             
-            restored_count = 0
+            # 兼容：如果没有 bot_accounts 但有主 token，自动创建
+            if self.token and self.token not in self._bot_accounts:
+                self._bot_accounts[self.token] = {
+                    "bot_id": self.bot_id or "",
+                    "user_id": self.user_id or "",
+                    "cursor": self._cursor,
+                    "context_tokens": dict(self._context_tokens)
+                }
+            
+            # 从用户文件夹恢复 token
             for user_id in list(self._context_tokens.keys()):
-                saved_token = self._load_user_token(user_id)
-                if saved_token:
-                    self._context_tokens[user_id] = saved_token
-                    restored_count += 1
-            
-            if restored_count > 0:
-                print(f"[同步] 已从用户文件夹恢复 {restored_count} 个会话 token")
+                if user_id not in self._user_token_map:
+                    # 旧数据：默认属于主 token
+                    self._user_token_map[user_id] = self.token
             
             if self.token:
-                print(f"加载配置成功，{len(self._context_tokens)} 个会话已恢复")
+                print(f"加载配置成功，{len(self._context_tokens)} 个会话，{len(self._bot_accounts)} 个 bot 账号")
                 if self._current_user:
                     print(f"当前会话用户: {self._current_user}")
                 for user_id in self._context_tokens.keys():
@@ -3696,6 +3735,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 print(f"   bot_id: {self.bot_id}")
                 print(f"   user_id: {self.user_id}")
                 
+                # 注册主账号
+                self._bot_accounts[self.token] = {
+                    "bot_id": self.bot_id or "",
+                    "user_id": self.user_id or "",
+                    "cursor": self._cursor,
+                    "context_tokens": {}
+                }
+                
                 print("正在拉取历史消息，恢复会话...")
                 self._fetch_and_restore_conversations()
                 
@@ -3722,12 +3769,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 from_user = msg.get("from_user_id")
                 ctx_token = msg.get("context_token")
                 if from_user and ctx_token:
-                    if from_user not in self._context_tokens:
+                    is_new = from_user not in self._context_tokens
+                    self._register_user_to_account(from_user, ctx_token, self.token)
+                    if is_new:
                         print(f"恢复会话: {from_user}")
-                    self._context_tokens[from_user] = ctx_token
-                    self._save_user_token(from_user, ctx_token)
-                    if self._current_user is None:
-                        self._current_user = from_user
                     
                     text = ""
                     for item in msg.get("item_list", []):
@@ -3752,24 +3797,25 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         else:
             print("没有找到历史会话")
     
-    def _build_headers(self) -> dict:
+    def _build_headers(self, token: str = None) -> dict:
         random_uin = random.randint(0, 0xFFFFFFFF)
         wechat_uin = base64.b64encode(str(random_uin).encode()).decode()
+        use_token = token or self.token
         return {
             "Content-Type": "application/json",
             "AuthorizationType": "ilink_bot_token",
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"Bearer {use_token}",
             "X-WECHAT-UIN": wechat_uin,
         }
     
-    def _post(self, endpoint: str, body: dict, timeout: int = 30) -> dict:
+    def _post(self, endpoint: str, body: dict, timeout: int = 30, token: str = None) -> dict:
         if is_termux():
             timeout = max(timeout, 30)
             if "getupdates" in endpoint:
                 timeout = 30
         
         body["base_info"] = {"channel_version": "1.0.3"}
-        headers = self._build_headers()
+        headers = self._build_headers(token=token)
         url = f"{self.ILINK_BASE_URL}/ilink/bot/{endpoint}"
         
         data = json.dumps(body).encode('utf-8')
@@ -3869,8 +3915,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         return text, media_info
     
     def start_add_user_qrcode(self) -> str:
-        """生成新的二维码用于添加用户，在独立线程中运行，返回 qrcode_key
-        重要：不会替换已有的 bot token，保证已有连接不受影响。"""
+        """生成新的二维码用于添加新用户（新 bot 账号），在独立线程中运行"""
         def _gen_qrcode():
             try:
                 url = f"{self.ILINK_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3"
@@ -3891,11 +3936,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 
                 if qrcode_url:
                     self._print_ascii_qrcode(qrcode_url)
-                    print(f"[添加用户] 二维码已生成，请扫描（不会影响已有连接）")
+                    print(f"[添加用户] 二维码已生成，请扫描")
                 
                 # 轮询扫码状态
                 start_ts = time.time()
-                while time.time() - start_ts < 120:  # 最多等 2 分钟
+                while time.time() - start_ts < 120:
                     if not self._running:
                         break
                     try:
@@ -3916,30 +3961,39 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                             print("[添加用户] 已扫码，请在手机上确认...")
                         elif st == "confirmed":
                             new_token = status.get("bot_token")
-                            print(f"[添加用户] 扫码确认成功！已有 token={bool(self.token)}, 新 token={bool(new_token)}")
+                            new_bot_id = status.get("ilink_bot_id")
+                            new_user_id = status.get("ilink_user_id")
                             
-                            # 关键修复：如果已有 token，不要替换！保持已有连接有效
-                            if new_token and not self.token:
-                                # 仅在首次登录时设置 token
+                            if not new_token:
+                                print("[添加用户] 错误：未获取到 bot_token")
+                                if self._pending_qrcode:
+                                    self._pending_qrcode["status"] = "error"
+                                break
+                            
+                            # 创建新的 bot 账号
+                            new_account = {
+                                "bot_id": new_bot_id or "",
+                                "user_id": new_user_id or "",
+                                "cursor": "",
+                                "context_tokens": {}
+                            }
+                            self._bot_accounts[new_token] = new_account
+                            
+                            # 如果是第一个账号，设为主 token
+                            if not self.token:
                                 self.token = new_token
-                                self.bot_id = status.get("ilink_bot_id")
-                                self.user_id = status.get("ilink_user_id")
-                                print(f"[添加用户] 首次登录，设置 token")
-                            elif new_token and self.token:
-                                # 已有 token，只更新配置中的 token 以备后用
-                                print(f"[添加用户] 保持已有 token 不变，扫描者将成为新用户")
+                                self.bot_id = new_bot_id
+                                self.user_id = new_user_id
+                                self._login_done = True
                             
-                            # 使用当前 token 拉取最新会话（包含新旧所有用户）
-                            if self.token:
-                                old_cursor = self._cursor
-                                self._cursor = ""  # 重置 cursor 以获取完整会话列表
-                                self._fetch_and_restore_conversations()
-                                if not self._context_tokens:
-                                    self._cursor = old_cursor
-                                    self._fetch_and_restore_conversations()
-                                self._save_config()
-                            else:
-                                print("[添加用户] 警告：没有可用的 bot token")
+                            print(f"[添加用户] 新 bot 账号已创建: {new_token[:8]}... (bot_id: {new_bot_id})")
+                            
+                            # 拉取新账号的历史会话
+                            self._fetch_and_restore_for_account(new_token, new_account)
+                            self._save_config()
+                            
+                            # 为新账号启动独立轮询线程
+                            self._start_account_poll(new_token, new_account)
                             
                             with self._add_user_lock:
                                 if self._pending_qrcode:
@@ -3973,6 +4027,43 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         thread.start()
         return qrcode_key
     
+    def _fetch_and_restore_for_account(self, bot_token: str, account: dict):
+        """为指定 bot 账号拉取历史会话"""
+        for _ in range(5):
+            body = {"get_updates_buf": account.get("cursor", "")}
+            result = self._post("getupdates", body, timeout=5, token=bot_token)
+            if result.get("get_updates_buf"):
+                account["cursor"] = result["get_updates_buf"]
+            messages = result.get("msgs", [])
+            for msg in messages:
+                from_user = msg.get("from_user_id")
+                ctx_token = msg.get("context_token")
+                if from_user and ctx_token:
+                    is_new = from_user not in self._context_tokens
+                    self._register_user_to_account(from_user, ctx_token, bot_token)
+                    
+                    text = ""
+                    for item in msg.get("item_list", []):
+                        if item.get("type") == 1:
+                            text = item.get("text_item", {}).get("text", "")
+                    if text:
+                        new_msg = {
+                            'from': from_user,
+                            'to': 'me',
+                            'text': text,
+                            'time': datetime.now().strftime('%H:%M:%S'),
+                            'type': 'in'
+                        }
+                        self._add_message_to_history(new_msg)
+                    
+                    if is_new:
+                        self._on_new_user(from_user)
+            if not messages:
+                break
+        
+        user_count = len(account.get("context_tokens", {}))
+        print(f"[账号 {bot_token[:8]}...] 已恢复 {user_count} 个会话")
+    
     def get_add_user_status(self) -> dict:
         """获取添加用户的状态"""
         with self._add_user_lock:
@@ -3981,14 +4072,31 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
             return dict(self._pending_qrcode)
     
     def start_polling(self):
+        """为每个 bot 账号启动独立的轮询线程"""
+        # 确保主账号已注册
+        if self.token and self.token not in self._bot_accounts:
+            self._bot_accounts[self.token] = {
+                "bot_id": self.bot_id or "",
+                "user_id": self.user_id or "",
+                "cursor": self._cursor,
+                "context_tokens": dict(self._context_tokens)
+            }
+        
+        for bot_token, account in self._bot_accounts.items():
+            self._start_account_poll(bot_token, account)
+    
+    def _start_account_poll(self, bot_token: str, account: dict):
+        """为单个 bot 账号启动轮询线程"""
         def poll():
+            cursor = account.get("cursor", "")
             while self._running:
                 try:
-                    body = {"get_updates_buf": self._cursor}
-                    result = self._post("getupdates", body, timeout=25)
+                    body = {"get_updates_buf": cursor}
+                    result = self._post("getupdates", body, timeout=25, token=bot_token)
                     
                     if result.get("get_updates_buf"):
-                        self._cursor = result["get_updates_buf"]
+                        cursor = result["get_updates_buf"]
+                        account["cursor"] = cursor
                         self._save_config()
                     
                     messages = result.get("msgs", [])
@@ -4023,7 +4131,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                             if cdn_media:
                                 msg_metadata['media_cdn'] = json.dumps(cdn_media)
                                 _prefetch_fn = media_info.get('filename', '')
-                                threading.Thread(target=self._prefetch_media, args=(cdn_media, _prefetch_fn), daemon=True).start()
+                                threading.Thread(target=self._prefetch_media, args=(cdn_media, _prefetch_fn, from_user), daemon=True).start()
                             
                             print(f"\n[收到{media_info['type']}] {from_user}: {media_info.get('filename', '')}")
                         elif text:
@@ -4044,28 +4152,32 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                             if self._message_callback:
                                 self._message_callback(new_msg)
                             
-                            if text:  # 只有文本消息才触发 AI 回复
+                            if text:
                                 threading.Thread(target=self._auto_ai_reply, args=(from_user, text), daemon=True).start()
                         
                         if from_user and ctx_token:
                             is_new = from_user not in self._context_tokens
-                            self._context_tokens[from_user] = ctx_token
-                            if not self._current_user:
-                                self._current_user = from_user
+                            self._register_user_to_account(from_user, ctx_token, bot_token)
                             self._save_config()
                             if is_new:
                                 self._on_new_user(from_user)
-                                print(f"[USER] 新用户 {from_user}，已保存到独立文件夹")
+                                print(f"[USER] 新用户 {from_user} (账号 {bot_token[:8]}...)")
                 except Exception as e:
                     time.sleep(0.5)
+        
         thread = threading.Thread(target=poll, daemon=True)
         thread.start()
+        self._poll_threads.append(thread)
+        token_short = bot_token[:8] if bot_token else "?"
+        print(f"[POLL] 已启动轮询线程: {token_short}...")
     
     def send_text(self, to_user_id: str, text: str) -> bool:
         context_token = self._context_tokens.get(to_user_id)
         if not context_token:
             print(f"[发送失败] 没有 {to_user_id} 的会话，让对方先发一条消息")
             return False
+        
+        use_token = self._get_token_for_user(to_user_id)
         
         client_id = f"msg-{uuid.uuid4().hex[:16]}"
         body = {
@@ -4079,7 +4191,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 "item_list": [{"type": 1, "text_item": {"text": text}}]
             }
         }
-        result = self._post("sendmessage", body)
+        result = self._post("sendmessage", body, token=use_token)
         
         errcode = result.get("errcode")
         ret = result.get("ret")
@@ -4310,6 +4422,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         try:
             print(f"[媒体上传] 正在上传 {filename}, 类型={media_type}, 大小={len(file_bytes)} bytes")
 
+            use_token = self._get_token_for_user(to_user_id)
+
             aes_key_hex = self._random_hex(16)
             aes_key_bytes = bytes.fromhex(aes_key_hex)
 
@@ -4329,7 +4443,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
                 "aeskey": aes_key_hex
             }
 
-            result = self._post("getuploadurl", body)
+            result = self._post("getuploadurl", body, token=use_token)
 
             ret = result.get("ret")
             errcode = result.get("errcode")
@@ -4402,6 +4516,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
         if description:
             self.send_text(to_user_id, description)
 
+        use_token = self._get_token_for_user(to_user_id)
         client_id = f"ilink-sdk:{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
 
         body = {
@@ -4416,7 +4531,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; font-family: -apple-sy
             }
         }
 
-        result = self._post("sendmessage", body)
+        result = self._post("sendmessage", body, token=use_token)
 
         errcode = result.get("errcode")
         ret = result.get("ret")
