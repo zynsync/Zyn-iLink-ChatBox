@@ -56,7 +56,7 @@
 2. 安装依赖
 
 ```bash
-pip install qrcode pycryptodome
+pip install qrcode pycryptodome pilk
 ```
 
 3. 运行程序
