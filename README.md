@@ -3,7 +3,7 @@
 # 🚀 Zyn iLink ChatBox
 ⭐如果觉得不错，欢迎给个Star支持一下⭐
 
-**强大的微信iLink客户端 | 初中生独立开发**
+**强大的微信iLink客户端**
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.7+-green.svg)](https://www.python.org/)
