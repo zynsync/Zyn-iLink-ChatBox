@@ -1,7 +1,7 @@
 <div align="center">
 
 # 🚀 Zyn iLink ChatBox
-⭐如果觉得不错，欢迎给个Star支持一下⭐
+⭐如果觉得不错，求给个Star支持一下😭⭐
 
 **强大的微信iLink客户端**
 
@@ -76,7 +76,7 @@ python Zyn-iLink-ChatBox.py
 
 ---
 
-💰 赞助支持
+💰 赞助支持qaq😭
 
 如果这个项目对您有帮助，欢迎扫码赞助支持！
 您的支持是我持续更新的动力！ 🙏
