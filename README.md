@@ -12,8 +12,19 @@
 
 </div>
 
----
+--
 
+↓求随便赞助点吧😭快吃不起饭了😭QAQ↓
+<details>
+  <summary style="color: #0366d6; font-weight: bold; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;">
+    <span style="font-size: 18px;">👇</span> 点击 <span style="color: #0366d6; font-size: 18px;">展开</span> 赞助
+  </summary>
+  <br>
+  <div align="center">
+    <img src="https://github.com/user-attachments/assets/560e99d9-4dc7-44c9-8c66-d8824816fc6b" alt="赞助二维码" width="280">
+    <p><em>感谢您的支持 😭</em></p>
+  </div>
+</details>
 ## 📋 基本信息
 
 > **开发者**：ZynSync  
